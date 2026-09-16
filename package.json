@@ -1,1 +1,1 @@
-{"name":"deadaim","version":"1.0.0","private":true,"type":"module","scripts":{"start":"node server.js","test":"node --test tests/*.test.js"},"engines":{"node":">=20"}}
+{"name":"deadaim","version":"2.1.0","private":true,"type":"module","scripts":{"start":"node server.js","test":"node --test tests/engine.test.js tests/training.test.js tests/app.test.js tests/identity.test.js"},"engines":{"node":">=20"}}

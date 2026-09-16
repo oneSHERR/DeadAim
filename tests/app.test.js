@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 test('session lifecycle: hit, pause, resume, results, history and restart',async()=>{
  const events=new Map(),elements=new Map();
- function target(id=''){return {id,value:'',type:'',min:'',max:'',hidden:false,disabled:false,tagName:'BODY',textContent:'',dataset:{},style:{setProperty(){}},classList:{add(){},remove(){},toggle(){}},addEventListener(name,fn){events.set(this.id+':'+name,fn);},append(){},replaceChildren(){},getBoundingClientRect(){return {width:1200,height:600};}};}
+ function target(id=''){return {id,value:'',type:'',min:'',max:'',hidden:false,disabled:false,tagName:'BODY',textContent:'',dataset:{},parentElement:{before(){},after(){}},before(){},after(){},getContext:()=>context,style:{setProperty(){}},classList:{add(){},remove(){},toggle(){}},addEventListener(name,fn){events.set(this.id+':'+name,fn);},append(){},replaceChildren(){},getBoundingClientRect(){return {width:1200,height:600};}};}
  const keys={sensitivity:1,dpi:800,duration:60,difficulty:'normal',aspect:'native',sound:true,color:'#c5f96b',calibration:1};
  for(const [key,value]of Object.entries(keys)){const el=target(key);el.type=typeof value==='number'?'number':typeof value==='boolean'?'checkbox':'select';elements.set(key,el);}
  const doc=target('document');doc.getElementById=id=>{if(!elements.has(id))elements.set(id,target(id));return elements.get(id);};doc.querySelectorAll=()=>[];doc.createElement=()=>target();doc.activeElement=target();doc.hidden=false;
@@ -34,5 +34,20 @@ test('session lifecycle: hit, pause, resume, results, history and restart',async
  await events.get('start:click')();events.get('document:keydown')({code:'KeyR',preventDefault(){}});
  assert.equal(doc.getElementById('hits').textContent,0);
  assert.equal(doc.getElementById('timer').textContent,'60.0');
+ doc.exitPointerLock();
+ events.get('cancelWarm:click')();
+ events.get('warm5:click')();
+ await events.get('start:click')();
+ let clock=performance.now();
+ for(let i=0;i<5;i++){clock+=61000;frame(clock);}
+ assert.equal(doc.getElementById('overlayTitle').textContent,'Разминка завершена.');
+ const warmHistory=JSON.parse(storage.get('deadaim-history'));
+ assert.equal(warmHistory.length,6);
+ assert.deepEqual(warmHistory.slice(0,5).map(x=>x.mode),['strafe','head','track','micro','flick']);
+ events.get('calibrationRun:click')();
+ await events.get('start:click')();
+ events.get('document:mousemove')({movementX:360/.022+1,movementY:0});
+ assert.equal(doc.getElementById('overlayTitle').textContent,'Оборот завершён.');
+ assert.equal(JSON.parse(storage.get('deadaim-history')).length,6);
  }finally{Math.random=random;}
 });
