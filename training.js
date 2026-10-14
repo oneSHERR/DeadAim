@@ -1,6 +1,6 @@
-export const modeLabels = { flick: 'Флики', micro: 'Точность', track: 'Трекинг', head: 'Уровень головы', strafe: 'Стрейф-цели' };
+export const modeLabels = { flick: 'Флики', micro: 'Точность', track: 'Трекинг', head: 'Уровень головы', strafe: 'Стрейф-цели', peek:'Удержание угла', adjust:'Флик + доводка', six:'Шесть целей', moving:'Движущиеся головы', angles:'Проверка углов', wall3:'Стена · 3 цели', clear50:'Зачистка · 50' };
 export function workoutPlan(minutes = 5) {
-  return Object.keys(modeLabels).map(mode => ({ mode, duration: minutes === 10 ? 120 : 60 }));
+  return ['flick','micro','track','head','strafe'].map(mode => ({ mode, duration: minutes === 10 ? 120 : 60 }));
 }
 export function calibrationFactor(current, measured, reference) {
   if (![current, measured, reference].every(v => Number.isFinite(v) && v > 0)) throw new Error('Введи положительные расстояния.');
@@ -9,13 +9,15 @@ export function calibrationFactor(current, measured, reference) {
   return Math.round(value * 1000) / 1000;
 }
 export function comparableKey(row) {
-  return `${row.mode}|${row.difficulty || 'normal'}|${row.duration}`;
+  return `${row.mode}|${row.difficulty || 'normal'}|${row.duration}|${row.variant||'standard'}|${row.challengeKey||''}`;
 }
+export function resultScore(row){return row.mode==='clear50'?(row.completed?100000-Math.min(120000,row.elapsedMs)/1000:row.hits):row.mode==='track'?row.accuracy:row.hits/row.duration;}
+export function resultLabel(row){return row.mode==='clear50'?(row.completed?`50 / 50 за ${(row.elapsedMs/1000).toFixed(2)} с`:`${row.hits} / 50 · время вышло`):row.mode==='track'?`${row.accuracy.toFixed(1)}% удержания`:`${(row.hits/row.duration).toFixed(2)} попадания/с · ${row.accuracy.toFixed(1)}%`;}
 export function records(rows) {
   const result = new Map();
   for (const row of rows) {
     if (!(row.duration > 0)) continue;
-    const key = comparableKey(row), score = row.mode === 'track' ? row.accuracy : row.hits / row.duration;
+    const key = comparableKey(row), score = resultScore(row);
     const old = result.get(key);
     if (!old || score > old.score || (score === old.score && row.accuracy > old.accuracy)) result.set(key, { ...row, score });
   }

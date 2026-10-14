@@ -1,89 +1,69 @@
-import { anonymousIdentity } from './identity.js';
 import { firebaseConfig } from './firebase-config.js';
-import { modeLabels, comparableKey } from './training.js';
+import { normalizeNickname, registerIdentity, cloudResult } from './account-model.js';
+import { modeLabels, comparableKey, resultScore, resultLabel } from './training.js';
 
-export function initCloud() {
-  const $ = id => document.getElementById(id);
-  const panel = document.createElement('section');
-  panel.className = 'lab-panel friends-panel';
-  panel.innerHTML = `<div class="section-title"><h3>Тренируйся с друзьями</h3><span>SQUAD STATS</span></div>
-    <p id="cloudStatus" role="status">${firebaseConfig?'Введи ник и подключись к друзьям. Почта и пароль не нужны.':'Firebase ещё не подключён. Все тренировки и личная статистика уже работают локально.'}</p>
-    <label for="playerName">Твой ник (видят участники группы)</label><input id="playerName" maxlength="24" placeholder="Твой ник" autocomplete="nickname">
-    <button id="cloudLogin" class="secondary" ${firebaseConfig?'':'disabled'}>Подключиться по нику</button>
-    <div id="cloudAccount" hidden>
-    <div class="inline-controls"><button id="createRoom" class="secondary">Создать группу</button><label>Код группы<input id="roomCode" maxlength="32" placeholder="Код от друга" autocomplete="off"></label><button id="joinRoom" class="secondary">Вступить</button></div>
-    <p id="activeRoom"></p><button id="leaveRoom" class="secondary" hidden>Покинуть группу</button>
-    <div class="inline-controls"><label>Режим<select id="friendsMode">${Object.entries(modeLabels).map(([v,n])=>`<option value="${v}">${n}</option>`).join('')}</select></label><label>Сложность<select id="friendsDifficulty"><option value="normal">Нормально</option><option value="easy">Легко</option><option value="hard">Сложно</option></select></label><label>Серия<select id="friendsDuration"><option value="60">60 сек</option><option value="30">30 сек</option><option value="120">120 сек</option></select></label><button id="refreshFriends" class="secondary">Обновить</button></div>
-    <div id="friendsBoard" class="empty">Вступи в группу, чтобы увидеть результаты.</div>
-    <p class="field-note">В группу отправляются новые завершённые серии, пока ты подключён к группе. Ник и результаты видны участникам. Старые локальные серии автоматически не загружаются. Это дружеское сравнение без защиты от подделки результатов.</p>
-    <button id="retryUpload" class="secondary" hidden>Повторить отправку результатов</button></div>`;
+export function initCloud(callbacks={}) {
+  const $=id=>document.getElementById(id);
+  const screen=document.createElement('section');screen.className='auth-screen';screen.id='authScreen';screen.setAttribute('role','dialog');screen.setAttribute('aria-modal','true');screen.setAttribute('aria-label','Аккаунт DEADAIM');
+  screen.innerHTML=`<div class="auth-art"><a class="brand" href="./">⌖ DEAD<span>AIM</span></a><div class="auth-orbit"><i></i><i></i><i></i><b>⌖</b></div><span class="eyebrow">YOUR AIM. YOUR PROGRESS.</span><h1>Каждый день.<br><em>На шаг точнее.</em></h1><p>Сохраняй рекорды. Находи друзей.<br>Возвращайся к своему прогрессу с любого компьютера.</p><span class="auth-foot">DEADAIM · TRAINING LAB / 03</span></div>
+  <div class="auth-side"><button id="authGuest" class="text-button">Тренироваться без аккаунта ↗</button><div class="auth-form-wrap"><span class="eyebrow">PLAYER ACCESS</span><h2 id="authTitle">С возвращением.</h2><p id="authSubtitle">Войди, чтобы продолжить с того же места.</p><div class="auth-tabs"><button id="loginTab" class="active" type="button">Войти</button><button id="registerTab" type="button">Создать аккаунт</button></div>
+  <form id="accountForm"><label id="nicknameLabel" hidden>Уникальный ник<input id="accountNick" maxlength="20" placeholder="alisher_7" autocomplete="nickname"></label><label id="emailLabel">Email<input id="accountEmail" type="email" autocomplete="email" required placeholder="you@example.com"></label><label id="passwordLabel">Пароль<input id="accountPassword" type="password" autocomplete="current-password" required placeholder="Твой пароль"></label><label id="confirmLabel" hidden>Повтори пароль<input id="accountConfirm" type="password" autocomplete="new-password"></label><p id="emailNote" class="field-note" hidden>Подтверждение email не требуется. Для восстановления пароля нужен доступ к указанной почте. Не используй чужой адрес.</p><button id="accountSubmit" class="primary" type="submit">Войти ↗</button><button id="resetPassword" type="button" class="text-button">Забыл пароль</button></form><p id="authStatus" role="status" class="auth-status"></p></div></div>`;
+  document.body.append(screen);function modal(open){screen.hidden=!open;document.body.classList.toggle('auth-open',open);document.querySelectorAll('body > header,body > main').forEach(n=>n.inert=open);}modal(true);
+  const headerButton=document.createElement('button');headerButton.id='accountOpen';headerButton.className='secondary';headerButton.textContent='Войти / профиль';document.querySelector('header').append(headerButton);
+  const panel=document.createElement('section');panel.className='lab-panel account-panel';
+  panel.innerHTML=`<div class="section-title"><h3>Твой профиль и друзья</h3><span>SQUAD / PERSONAL STATS</span></div><p id="cloudStatus" role="status">Войди или зарегистрируйся, чтобы сохранять результаты в облаке.</p><button id="panelLogin" class="secondary">Открыть вход</button><div id="profileArea" hidden><div class="profile-banner"><div id="profileAvatar" class="profile-avatar">DA</div><div><h2 id="profileNick"></h2><p id="profileStats">Твой прогресс</p></div><button id="accountLogout" class="secondary">Выйти</button></div><div class="inline-controls"><button id="syncHistory" class="secondary">Синхронизировать статистику</button><button id="saveMouse" class="secondary">Сохранить сенсу в облаке</button><button id="loadMouse" class="secondary">Загрузить сенсу</button><button id="uploadGuest" class="secondary">Перенести гостевую историю</button><button id="retryUpload" class="secondary" hidden>Повторить отправку</button></div>
+  <h3>Добавить друга</h3><form id="findFriend" class="inline-controls"><label>Точный ник<input id="friendNick" placeholder="Ник друга" maxlength="20" required></label><button class="secondary" type="submit">Найти</button></form><div id="foundFriend"></div><div class="section-title friends-heading"><h3>Заявки и друзья</h3><button id="refreshFriends" class="text-button">Обновить ↻</button></div><div id="friendList" class="friend-list"></div><div id="friendStats" class="friend-stats"></div><p class="field-note">Друг видит твои результаты после принятия заявки. Email и настройки мыши доступны только тебе. Результаты считает браузер — это дружеское сравнение.</p></div>`;
   $('history').parentElement.after(panel);
-  let api, user=null, room=null, loading, busy=false, failed=[];
-  const status=text=>$('cloudStatus').textContent=text;
-  const explain=e=>({
-    'auth/operation-not-allowed':'Включи Anonymous в Firebase → Authentication → Sign-in method.',
-    'auth/network-request-failed':'Нет связи с Firebase. Проверь интернет и повтори подключение.',
-    'auth/unauthorized-domain':'Добавь домен сайта в Firebase Authentication → Settings → Authorized domains.',
-    'permission-denied':'Нет доступа. Проверь членство в группе и опубликованные правила Firestore.',
-    'unavailable':'Нет связи с Firebase. Локальная тренировка продолжает работать.'
-  }[e.code]||e.message||'Не удалось выполнить действие. Повтори позже.');
-  async function load() {
-    if(api)return api;
-    if(!loading)loading=(async()=>{
-      const base='https://www.gstatic.com/firebasejs/12.19.0/';
-      const [app,a,f]=await Promise.all([import(base+'firebase-app.js'),import(base+'firebase-auth.js'),import(base+'firebase-firestore.js')]);
-      const instance=app.initializeApp(firebaseConfig),auth=a.getAuth(instance),db=f.getFirestore(instance);
-      api={a,f,auth,db};
-      return api;
-    })().catch(e=>{loading=null;throw e;});
-    return loading;
+  let api,promise,user=null,profile=null,busy=false,register=false,epoch=0,failed=[],links=[];
+  const status=t=>$('cloudStatus').textContent=t,authStatus=t=>$('authStatus').textContent=t;
+  const explain=e=>({'auth/operation-not-allowed':'Включи Email/Password в Firebase → Authentication → Sign-in method.','auth/email-already-in-use':'Этот email уже зарегистрирован. Войди или восстанови пароль.','auth/invalid-credential':'Не удалось войти. Проверь email и пароль.','auth/wrong-password':'Неверный email или пароль.','auth/weak-password':'Пароль слишком слабый. Используй минимум 8 символов.','auth/invalid-email':'Проверь формат email.','auth/network-request-failed':'Нет связи с Firebase. Проверь интернет и повтори.','auth/too-many-requests':'Слишком много попыток. Подожди и попробуй позже.','permission-denied':'Нет доступа. Нужно опубликовать новые правила Firestore из версии 3.0.','unavailable':'Firebase недоступен. Тренировка сохранена локально.'}[e.code]||e.message||'Не удалось выполнить действие.');
+  const doc=(...p)=>api.f.doc(api.db,...p);
+  async function load(){if(api)return api;if(!promise)promise=(async()=>{if(!firebaseConfig)throw new Error('Firebase ещё не подключён.');const base='https://www.gstatic.com/firebasejs/12.19.0/';const [app,a,f]=await Promise.all([import(base+'firebase-app.js'),import(base+'firebase-auth.js'),import(base+'firebase-firestore.js')]);const instance=app.getApps().length?app.getApp():app.initializeApp(firebaseConfig);const auth=a.getAuth(instance);await auth.authStateReady();api={a,f,auth,db:f.getFirestore(instance)};return api;})().catch(e=>{promise=null;throw e;});return promise;}
+  async function action(fn){if(busy)return;busy=true;$('accountSubmit').disabled=true;try{await fn();}catch(e){status(explain(e));authStatus(explain(e));}finally{busy=false;$('accountSubmit').disabled=false;}}
+  function tabs(value){register=value;$('nicknameLabel').hidden=!value;$('confirmLabel').hidden=!value;$('emailNote').hidden=!value;$('accountNick').required=value;$('accountConfirm').required=value;$('accountPassword').minLength=value?8:1;$('accountPassword').autocomplete=value?'new-password':'current-password';$('authTitle').textContent=value?'Твой новый уровень.':'С возвращением.';$('authSubtitle').textContent=value?'Создай профиль. Тренируйся вместе с друзьями.':'Войди, чтобы продолжить с того же места.';$('accountSubmit').textContent=value?'Создать аккаунт ↗':'Войти ↗';$('loginTab').classList.toggle('active',!value);$('registerTab').classList.toggle('active',value);$('resetPassword').hidden=value;authStatus('');}
+  function open(){if(profile){panel.scrollIntoView?.({block:'start'});return;}modal(true);$('accountEmail').focus?.();}
+  function guest(){modal(false);$('accountPassword').value='';$('accountConfirm').value='';headerButton.focus?.();}
+  $('authGuest').addEventListener('click',guest);$('accountOpen').addEventListener('click',open);$('panelLogin').addEventListener('click',open);
+  $('loginTab').addEventListener('click',()=>tabs(false));$('registerTab').addEventListener('click',()=>tabs(true));
+  screen.addEventListener('keydown',e=>{if(e.key==='Escape')guest();if(e.key==='Tab'){const nodes=[...screen.querySelectorAll('button,input')].filter(n=>!n.disabled&&n.getClientRects().length);const first=nodes[0],last=nodes.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}}});
+  async function claimNickname(nickname){const name=normalizeNickname(nickname),uid=user.uid,{f,db}=api;await f.runTransaction(db,async tx=>{const nick=doc('deadaimNames',name),ref=doc('deadaimProfiles',uid);const [n,p]=await Promise.all([tx.get(nick),tx.get(ref)]);if(p.exists())return;if(n.exists())throw new Error('Этот ник уже занят. Выбери другой — аккаунт уже создан, повторять email и пароль не нужно.');tx.set(nick,{uid});tx.set(ref,{nickname:name,createdAt:f.serverTimestamp()});});}
+  function needsNickname(){tabs(true);$('loginTab').disabled=true;$('registerTab').disabled=true;$('emailLabel').hidden=true;$('passwordLabel').hidden=true;$('confirmLabel').hidden=true;$('accountEmail').required=false;$('accountPassword').required=false;$('accountConfirm').required=false;$('accountSubmit').textContent='Сохранить ник ↗';$('authSubtitle').textContent='Аккаунт создан. Выбери свободный ник, чтобы закончить.';}
+  async function historyFor(uid){const snap=await api.f.getDocs(api.f.query(api.f.collection(api.db,'deadaimProfiles',uid,'sessions'),api.f.orderBy('timestamp','desc'),api.f.limit(500)));return snap.docs.map(d=>({...d.data(),id:d.id}));}
+  async function refreshOwn(){const uid=user.uid,token=epoch,rows=await historyFor(uid);if(token!==epoch)return;callbacks.account?.(uid,rows);$('profileStats').textContent=`${rows.length} последних серий в облаке · ${new Set(rows.map(r=>r.mode)).size} режимов`;status('Облачная история обновлена.');}
+  async function activate(){
+    const token=++epoch;user=api.auth.currentUser;profile=null;if(!user||user.isAnonymous)return;
+    const p=await api.f.getDoc(doc('deadaimProfiles',user.uid));if(token!==epoch)return;
+    if(!p.exists()){needsNickname();return;}
+    profile=p.data();$('profileNick').textContent='@'+profile.nickname;$('profileAvatar').textContent=profile.nickname.slice(0,2).toUpperCase();$('profileArea').hidden=false;$('panelLogin').hidden=true;$('accountOpen').textContent='@'+profile.nickname;guest();
+    try{localStorage.setItem('deadaim-account-connected','1');}catch{}
+    callbacks.account?.(user.uid,[]);await refreshOwn();await refreshFriends();
   }
-  async function action(fn) {
-    if(busy)return;busy=true;
-    try{await fn();}catch(e){status(explain(e));}finally{busy=false;}
+  $('accountForm').addEventListener('submit',e=>{e.preventDefault();action(async()=>{await load();authStatus('Подключаю профиль…');const current=api.auth.currentUser;
+    if(current&&!current.isAnonymous&&!profile&&$('emailLabel').hidden){user=current;await claimNickname($('accountNick').value);await activate();return;}
+    const email=$('accountEmail').value.trim(),password=$('accountPassword').value;
+    if(register){const nickname=normalizeNickname($('accountNick').value);if(password!==$('accountConfirm').value)throw new Error('Пароли не совпадают.');user=await registerIdentity(api,email,password);$('accountPassword').value='';$('accountConfirm').value='';try{await claimNickname(nickname);}catch(e){needsNickname();throw e;}}
+    else user=(await api.a.signInWithEmailAndPassword(api.auth,email,password)).user;
+    $('accountPassword').value='';$('accountConfirm').value='';await activate();});});
+  $('resetPassword').addEventListener('click',()=>action(async()=>{const email=$('accountEmail').value.trim();if(!email||!$('accountEmail').checkValidity())throw new Error('Введи корректный email в поле выше.');await load();await api.a.sendPasswordResetEmail(api.auth,email);authStatus('Если для этого адреса доступно восстановление, письмо будет отправлено. Проверь входящие и спам.');}));
+  $('accountLogout').addEventListener('click',()=>action(async()=>{await api.a.signOut(api.auth);epoch++;user=profile=null;failed=[];links=[];$('retryUpload').hidden=true;$('profileArea').hidden=true;$('panelLogin').hidden=false;$('friendList').replaceChildren();$('foundFriend').replaceChildren();$('friendStats').replaceChildren();$('accountOpen').textContent='Войти / профиль';$('emailLabel').hidden=false;$('passwordLabel').hidden=false;$('accountEmail').required=true;$('accountPassword').required=true;try{localStorage.removeItem('deadaim-account-connected');}catch{}callbacks.account?.(null);$('loginTab').disabled=false;$('registerTab').disabled=false;tabs(false);status('Ты вышел. Теперь тренировки сохраняются в гостевой истории.');}));
+  const requireProfile=()=>{if(!profile||!user)throw new Error('Сначала войди в аккаунт.');};
+  function button(text,fn){const b=document.createElement('button');b.className='secondary';b.textContent=text;b.addEventListener('click',()=>action(fn));return b;}
+  async function refreshFriends(){requireProfile();const uid=user.uid,token=epoch,{f,db}=api;const snap=await f.getDocs(f.query(f.collection(db,'deadaimLinks'),f.where('members','array-contains',uid),f.limit(100)));if(token!==epoch)return;links=snap.docs.map(d=>({...d.data(),id:d.id}));const root=$('friendList');root.replaceChildren();if(!links.length){root.textContent='Пока никого. Найди друга по точному нику.';return;}
+    for(const link of links){const other=link.members.find(x=>x!==uid),p=await f.getDoc(doc('deadaimProfiles',other));if(token!==epoch)return;const name=p.exists()?p.data().nickname:'Игрок',row=document.createElement('div');row.className='friend-row';const label=document.createElement('strong');label.textContent='@'+name;row.append(label);const hint=document.createElement('span');hint.textContent=link.status==='accepted'?'В друзьях':link.from===uid?'Заявка отправлена':'Хочет добавить тебя';row.append(hint);
+      if(link.status==='pending'&&link.to===uid)row.append(button('Принять',async()=>{await f.updateDoc(doc('deadaimLinks',link.id),{status:'accepted'});await refreshFriends();}));
+      if(link.status==='accepted')row.append(button('Статистика',()=>showFriend(other,name)));
+      row.append(button(link.status==='accepted'?'Убрать из друзей':link.to===uid?'Отклонить':'Отменить',async()=>{await f.deleteDoc(doc('deadaimLinks',link.id));$('friendStats').replaceChildren();await refreshFriends();}));root.append(row);
+    }
   }
-  function requireUser(){if(!user)throw new Error('Сначала введи ник и нажми «Подключиться по нику».');}
-  function selectedKey(){return `${$('friendsMode').value}|${$('friendsDifficulty').value}|${$('friendsDuration').value}`;}
-  async function refresh(){
-    requireUser();if(!room)throw new Error('Сначала вступи в группу.');
-    const currentRoom=room,currentUser=user.uid,{f,db}=api;
-    const snapshot=await f.getDocs(f.query(f.collection(db,'deadaimRooms',room,'results'),f.orderBy('createdAt','desc'),f.limit(200)));
-    if(room!==currentRoom||user?.uid!==currentUser)return;
-    const best=new Map();
-    for(const doc of snapshot.docs){const r=doc.data();if(comparableKey(r)!==selectedKey())continue;const score=r.mode==='track'?r.accuracy:r.hits/r.duration;const old=best.get(r.uid);if(!old||score>old.score||(score===old.score&&r.accuracy>old.accuracy))best.set(r.uid,{...r,score});}
-    const board=$('friendsBoard');board.replaceChildren();
-    if(!best.size)board.textContent='Для этих параметров пока нет результатов среди последних 200 серий группы.';
-    [...best.values()].sort((a,b)=>b.score-a.score||b.accuracy-a.accuracy).forEach((r,i)=>{const row=document.createElement('div');row.className='history-row';for(const value of [`${i+1}. ${r.name}`,r.mode==='track'?`${r.score.toFixed(1)}% удержания`:`${r.score.toFixed(2)} попадания/с`,`${r.accuracy.toFixed(1)}%`,`${r.duration} сек`]){const el=document.createElement('span');el.textContent=value;row.append(el);}board.append(row);});
-    status('Таблица обновлена. Лучшие результаты среди последних 200 серий группы.');
-  }
-  function selectRoom(code){room=code;$('activeRoom').textContent=`Код приглашения: ${code} · передай друзьям`;$('leaveRoom').hidden=false;}
-  try { $('playerName').value=localStorage.getItem('deadaim-nickname')||''; } catch {}
-  $('playerName').addEventListener('change',()=>{try{localStorage.setItem('deadaim-nickname',$('playerName').value.trim().slice(0,24));}catch{}});
-  $('cloudLogin').addEventListener('click',()=>action(async()=>{
-    const nickname=$('playerName').value.trim();
-    if(!nickname)throw new Error('Сначала введи свой ник.');
-    if(!firebaseConfig)throw new Error('Firebase ещё не настроен.');
-    status('Подключаю…');
-    const {auth,a}=await load();
-    user=await anonymousIdentity(auth,a.signInAnonymously);
-    try{localStorage.setItem('deadaim-nickname',nickname.slice(0,24));}catch{}
-    $('cloudAccount').hidden=false;$('cloudLogin').hidden=true;
-    status('Готово! Создай группу или введи код друга. Ник можно менять; твой ID в этом браузере сохраняется.');
-  }));
-  $('createRoom').addEventListener('click',()=>action(async()=>{requireUser();if(room)throw new Error('Сначала покинь текущую группу.');const code=crypto.randomUUID().replaceAll('-','').slice(0,24),{f,db}=api;await f.setDoc(f.doc(db,'deadaimRooms',code),{members:[user.uid],createdAt:f.serverTimestamp()});selectRoom(code);await refresh();}));
-  $('joinRoom').addEventListener('click',()=>action(async()=>{
-    requireUser();if(room)throw new Error('Сначала покинь текущую группу.');const code=$('roomCode').value.trim().toLowerCase();if(!/^[a-f0-9]{24}$/.test(code))throw new Error('Код должен содержать 24 символа. Скопируй его у друга.');
-    const {f,db}=api,ref=f.doc(db,'deadaimRooms',code),uid=user.uid;
-    await f.runTransaction(db,async tx=>{const snap=await tx.get(ref);if(!snap.exists())throw new Error('Группа не найдена. Проверь код.');const members=snap.data().members;if(members.includes(uid))return;if(members.length>=20)throw new Error('В группе уже 20 участников.');tx.update(ref,{members:[...members,uid]});});selectRoom(code);await refresh();
-  }));
-  $('leaveRoom').addEventListener('click',()=>action(async()=>{requireUser();if(!room)return;await api.f.updateDoc(api.f.doc(api.db,'deadaimRooms',room),{members:api.f.arrayRemove(user.uid)});room=null;$('activeRoom').textContent='Ты покинул группу. Ранее отправленные результаты остаются у её участников.';$('leaveRoom').hidden=true;$('friendsBoard').textContent='Выбери группу.';}));
-  $('refreshFriends').addEventListener('click',()=>action(refresh));
-  for(const id of ['friendsMode','friendsDifficulty','friendsDuration'])$(id).addEventListener('change',()=>{if(room)action(refresh);});
-  async function send(item){const {f,db}=api;if(user?.uid!==item.uid)throw new Error('Исходный профиль недоступен. Результат сохранён локально.');await f.setDoc(f.doc(db,'deadaimRooms',item.room,'results',item.id),{...item.data,createdAt:f.serverTimestamp()});}
-  $('retryUpload').addEventListener('click',()=>action(async()=>{const pending=[...failed];for(const item of pending){await send(item);failed=failed.filter(x=>x!==item);}$('retryUpload').hidden=!failed.length;status('Результаты отправлены.');if(room)await refresh();}));
-  return {submit(row){
-    if(!user||!room)return;
-    const item={uid:user.uid,room,id:`${user.uid}_${row.id}`,data:{uid:user.uid,name:($('playerName').value.trim()||'Игрок').slice(0,24),mode:row.mode,difficulty:row.difficulty,duration:row.duration,hits:row.hits,shots:row.shots,accuracy:row.accuracy,avgMs:row.avgMs}};
-    send(item).then(()=>status('Результат отправлен в группу. Нажми «Обновить» для сравнения.')).catch(e=>{failed.push(item);$('retryUpload').hidden=false;status(`Результат сохранён локально; отправка не завершена. ${explain(e)}`);});
-  }};
+  async function showFriend(uid,name){const token=epoch,rows=await historyFor(uid);if(token!==epoch)return;const root=$('friendStats');root.replaceChildren();const title=document.createElement('h3');title.textContent='Результаты @'+name;root.append(title);const own=callbacks.getHistory?.()||[],config=callbacks.getSettings();for(const [key,label]of Object.entries(modeLabels)){const matching=rows.filter(r=>comparableKey(r)===comparableKey({...config,mode:key,challengeKey:config.variant==='challenge'?config.challengeKey:''}));if(!matching.length)continue;const best=matching.sort((a,b)=>resultScore(b)-resultScore(a))[0],mine=own.filter(r=>comparableKey(r)===comparableKey(best)).sort((a,b)=>resultScore(b)-resultScore(a))[0];const p=document.createElement('p');p.textContent=`${label}: ${resultLabel(best)} · ты: ${mine?resultLabel(mine):'ещё нет серии'}`;root.append(p);}
+    const note=document.createElement('p');note.className='field-note';note.textContent=`Сравнение по твоим настройкам: ${config.difficulty} · ${config.duration}с · ${config.variant}${config.variant==='challenge'?' · '+config.challengeKey:''}. Ниже — последние серии друга. Учитываются последние 500 облачных результатов.`;root.append(note);for(const r of rows.slice(0,10)){const p=document.createElement('p');p.textContent=`${modeLabels[r.mode]} · ${r.difficulty} · ${r.duration}с · ${r.variant||'standard'} · ${resultLabel(r)} · ${r.date}`;root.append(p);}if(!rows.length)root.append(document.createTextNode('Друг ещё не завершил облачную тренировку.'));}
+  $('findFriend').addEventListener('submit',e=>{e.preventDefault();action(async()=>{requireProfile();const token=epoch,name=normalizeNickname($('friendNick').value),snap=await api.f.getDoc(doc('deadaimNames',name));if(token!==epoch)return;const root=$('foundFriend');root.replaceChildren();if(!snap.exists()){root.textContent='Игрок не найден. Проверь точный ник.';return;}const other=snap.data().uid;if(other===user.uid){root.textContent='Это твой профиль.';return;}await refreshFriends();if(links.some(l=>l.members.includes(other))){root.textContent='Вы уже друзья или заявка уже отправлена. Проверь список ниже.';return;}const p=document.createElement('p');p.textContent='@'+name;root.append(p,button('Добавить в друзья',async()=>{const uid=user.uid;await api.f.setDoc(doc('deadaimLinks',uid+'_'+other),{from:uid,to:other,members:[uid,other],status:'pending',createdAt:api.f.serverTimestamp()});root.textContent='Заявка отправлена.';await refreshFriends();}));});});
+  $('refreshFriends').addEventListener('click',()=>action(refreshFriends));$('syncHistory').addEventListener('click',()=>action(async()=>{requireProfile();const uid=user.uid;for(const row of (callbacks.getHistory?.()||[])){if(row.id)await send(row,uid);}failed=[];$('retryUpload').hidden=true;await refreshOwn();}));
+  async function send(row,uid){if(user?.uid!==uid)throw new Error('Аккаунт изменился. Результат остался в локальной истории.');const data=cloudResult(row);await api.f.setDoc(doc('deadaimProfiles',uid,'sessions',row.id),data);}
+  $('retryUpload').addEventListener('click',()=>action(async()=>{requireProfile();for(const item of [...failed]){await send(item.row,item.uid);failed=failed.filter(x=>x!==item);}$('retryUpload').hidden=!failed.length;await refreshOwn();}));
+  $('uploadGuest').addEventListener('click',()=>action(async()=>{requireProfile();let rows;try{rows=JSON.parse(localStorage.getItem('deadaim-history')||'[]');}catch{rows=[];}if(!Array.isArray(rows))rows=[];let n=0;const uid=user.uid;for(const row of rows.slice(0,500)){if(!row.id)continue;await send(row,uid);n++;}await refreshOwn();status(`Перенесено ${n} гостевых серий. Исходная локальная история сохранена.`);}));
+  $('saveMouse').addEventListener('click',()=>action(async()=>{requireProfile();const s=callbacks.getSettings(),data={};for(const k of ['sensitivity','dpi','calibration','color','aspect','sound'])data[k]=s[k];await api.f.setDoc(doc('deadaimProfiles',user.uid,'private','settings'),data);status('Настройки мыши сохранены в твоём аккаунте.');}));
+  $('loadMouse').addEventListener('click',()=>action(async()=>{requireProfile();const token=epoch,snap=await api.f.getDoc(doc('deadaimProfiles',user.uid,'private','settings'));if(token!==epoch)return;if(!snap.exists())throw new Error('Сначала сохрани сенсу в облаке.');callbacks.restoreSettings?.(snap.data());status('Настройки мыши загружены.');}));
+  tabs(false);$('accountEmail').focus?.();try{if(localStorage.getItem('deadaim-account-connected'))action(async()=>{await load();await activate();});}catch{}
+  return {submit(row){if(!profile||!user)return;const uid=user.uid;send(row,uid).then(()=>{if(user?.uid===uid)status('Серия сохранена в твоём аккаунте.');}).catch(e=>{if(user?.uid!==uid)return;failed.push({row,uid});$('retryUpload').hidden=false;status('Серия сохранена локально. '+explain(e));});}};
 }

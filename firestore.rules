@@ -5,6 +5,93 @@ service cloud.firestore {
     function member(code) {
       return signedIn() && request.auth.uid in get(/databases/$(database)/documents/deadaimRooms/$(code)).data.members;
     }
+    // v3 public profiles contain only nickname and creation time. No email/password.
+    function registered() { return signedIn() && 'email' in request.auth.token; }
+    function own(uid) { return registered() && request.auth.uid == uid; }
+    function accepted(id) {
+      return exists(/databases/$(database)/documents/deadaimLinks/$(id))
+        && get(/databases/$(database)/documents/deadaimLinks/$(id)).data.status == 'accepted';
+    }
+    function friend(uid) {
+      return registered() && (accepted(request.auth.uid + '_' + uid) || accepted(uid + '_' + request.auth.uid));
+    }
+    match /deadaimNames/{nickname} {
+      allow get: if registered();
+      allow list, update, delete: if false;
+      allow create: if registered() && nickname.matches('^[a-z0-9_]{3,20}$')
+        && request.resource.data.keys().hasOnly(['uid'])
+        && request.resource.data.uid == request.auth.uid
+        && getAfter(/databases/$(database)/documents/deadaimProfiles/$(request.auth.uid)).data.nickname == nickname;
+    }
+    match /deadaimProfiles/{uid} {
+      allow get: if registered();
+      allow list, update, delete: if false;
+      allow create: if own(uid)
+        && request.resource.data.keys().hasOnly(['nickname','createdAt'])
+        && request.resource.data.nickname is string
+        && request.resource.data.nickname.matches('^[a-z0-9_]{3,20}$')
+        && request.resource.data.createdAt == request.time
+        && getAfter(/databases/$(database)/documents/deadaimNames/$(request.resource.data.nickname)).data.uid == uid;
+      match /sessions/{id} {
+        allow read: if exists(/databases/$(database)/documents/deadaimProfiles/$(uid)) && (own(uid) || friend(uid));
+        allow create: if own(uid) && exists(/databases/$(database)/documents/deadaimProfiles/$(uid))
+          && id.matches('^[A-Za-z0-9_-]{1,128}$') && validSession();
+        allow update: if own(uid) && request.resource.data == resource.data;
+        allow delete: if own(uid);
+        function validSession() {
+          let d = request.resource.data;
+          return d.keys().hasAll(['mode','difficulty','duration','hits','shots','accuracy','avgMs','elapsedMs','completed','variant','challengeKey','missed','reactionMs','firstHits','version','timestamp','date'])
+            && d.keys().hasOnly(['mode','difficulty','duration','hits','shots','accuracy','avgMs','elapsedMs','completed','variant','challengeKey','missed','reactionMs','firstHits','version','timestamp','date'])
+            && d.mode in ['flick','micro','track','head','strafe','peek','adjust','six','moving','angles','wall3','clear50']
+            && d.difficulty in ['easy','normal','hard'] && d.duration in [30,60,120]
+            && d.hits is int && d.hits >= 0 && d.hits <= 10000
+            && d.shots is int && d.shots >= d.hits && d.shots <= 10000
+            && d.accuracy is number && d.accuracy >= 0 && d.accuracy <= 100
+            && d.avgMs is int && d.avgMs >= 0 && d.avgMs <= 120000
+            && d.elapsedMs is int && d.elapsedMs > 0 && d.elapsedMs <= d.duration * 1000
+            && d.completed is bool && (!d.completed || (d.mode == 'clear50' && d.hits == 50))
+            && (d.mode != 'clear50' || d.hits <= 50)
+            && d.variant in ['standard','adaptive','challenge']
+            && d.challengeKey is string && d.challengeKey.size() <= 32
+            && (d.variant == 'challenge' || d.challengeKey == '')
+            && d.missed is int && d.missed >= 0 && d.missed <= 10000
+            && d.reactionMs is int && d.reactionMs >= 0 && d.reactionMs <= 120000
+            && d.firstHits is int && d.firstHits >= 0 && d.firstHits <= d.hits
+            && d.version in [2,3] && d.timestamp is int && d.timestamp >= 0 && d.timestamp <= 4102444800000
+            && d.date is string && d.date.size() <= 60;
+        }
+      }
+      match /private/{id} {
+        allow read: if own(uid);
+        allow create, update: if own(uid) && id == 'settings'
+          && request.resource.data.keys().hasAll(['sensitivity','dpi','calibration','color','aspect','sound'])
+          && request.resource.data.keys().hasOnly(['sensitivity','dpi','calibration','color','aspect','sound'])
+          && request.resource.data.sensitivity is number && request.resource.data.sensitivity >= 0.05 && request.resource.data.sensitivity <= 20
+          && request.resource.data.dpi is number && request.resource.data.dpi >= 100 && request.resource.data.dpi <= 50000
+          && request.resource.data.calibration is number && request.resource.data.calibration >= 0.1 && request.resource.data.calibration <= 5
+          && request.resource.data.color is string && request.resource.data.color.matches('^#[0-9a-fA-F]{6}$')
+          && request.resource.data.aspect in ['native','stretched'] && request.resource.data.sound is bool;
+        allow delete: if own(uid);
+      }
+    }
+    match /deadaimLinks/{id} {
+      allow read: if registered() && request.auth.uid in resource.data.members;
+      allow create: if registered()
+        && request.resource.data.keys().hasOnly(['from','to','members','status','createdAt'])
+        && request.resource.data.from == request.auth.uid
+        && request.resource.data.to is string && request.resource.data.to.size() > 0 && request.resource.data.to.size() <= 128
+        && request.resource.data.to != request.auth.uid
+        && id == request.auth.uid + '_' + request.resource.data.to
+        && request.resource.data.members == [request.auth.uid, request.resource.data.to]
+        && request.resource.data.status == 'pending' && request.resource.data.createdAt == request.time
+        && exists(/databases/$(database)/documents/deadaimProfiles/$(request.auth.uid))
+        && exists(/databases/$(database)/documents/deadaimProfiles/$(request.resource.data.to))
+        && !exists(/databases/$(database)/documents/deadaimLinks/$(request.resource.data.to + '_' + request.auth.uid));
+      allow update: if registered() && resource.data.to == request.auth.uid
+        && resource.data.status == 'pending' && request.resource.data.status == 'accepted'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']);
+      allow delete: if registered() && request.auth.uid in resource.data.members;
+    }
     match /deadaimRooms/{code} {
       // Knowing an unguessable invitation code grants the ability to join, not list rooms.
       allow get: if signedIn();
